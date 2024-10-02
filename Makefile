@@ -178,13 +178,11 @@ ifneq ($(CPU_ONLY), 1)
 	LIBRARIES := cudart cublas curand
 endif
 
-LIBRARIES += glog gflags protobuf boost_system boost_filesystem m
+LIBRARIES += glog gflags protobuf boost_system boost_filesystem m hdf5_hl hdf5
 
 # handle IO dependencies
 USE_LEVELDB ?= 1
 USE_LMDB ?= 1
-# This code is taken from https://github.com/sh1r0/caffe-android-lib
-USE_HDF5 ?= 1
 USE_OPENCV ?= 1
 
 ifeq ($(USE_LEVELDB), 1)
@@ -193,15 +191,19 @@ endif
 ifeq ($(USE_LMDB), 1)
 	LIBRARIES += lmdb
 endif
-# This code is taken from https://github.com/sh1r0/caffe-android-lib
-ifeq ($(USE_HDF5), 1)
-	LIBRARIES += hdf5_hl hdf5
-endif
 ifeq ($(USE_OPENCV), 1)
 	LIBRARIES += opencv_core opencv_highgui opencv_imgproc
 
-	ifeq ($(OPENCV_VERSION), 3)
+	ifeq ($(OPENCV_VERSION), $(filter $(OPENCV_VERSION), 3 4))
 		LIBRARIES += opencv_imgcodecs
+	endif
+	ifeq ($(OPENCV_VERSION), 4)
+		ifeq ($(USE_PKG_CONFIG), 1)
+			INCLUDE_DIRS += $(shell pkg-config opencv4 --cflags-only-I | sed 's/-I//g')
+		else
+			INCLUDE_DIRS += /usr/include/opencv4 /usr/local/include/opencv4
+			INCLUDE_DIRS += /usr/include/opencv4/opencv /usr/local/include/opencv4/opencv
+		endif
 	endif
 
 endif
@@ -353,10 +355,6 @@ ifeq ($(ALLOW_LMDB_NOLOCK), 1)
 	COMMON_FLAGS += -DALLOW_LMDB_NOLOCK
 endif
 endif
-# This code is taken from https://github.com/sh1r0/caffe-android-lib
-ifeq ($(USE_HDF5), 1)
-	COMMON_FLAGS += -DUSE_HDF5
-endif
 
 # CPU-only configuration
 ifeq ($(CPU_ONLY), 1)
@@ -429,7 +427,11 @@ LINKFLAGS += -pthread -fPIC $(COMMON_FLAGS) $(WARNINGS)
 
 USE_PKG_CONFIG ?= 0
 ifeq ($(USE_PKG_CONFIG), 1)
-	PKG_CONFIG := $(shell pkg-config opencv --libs)
+	ifeq ($(OPENCV_VERSION), 4)
+		PKG_CONFIG := $(shell pkg-config opencv4 --libs)
+	else
+		PKG_CONFIG := $(shell pkg-config opencv --libs)
+	endif
 else
 	PKG_CONFIG :=
 endif
@@ -587,7 +589,7 @@ $(STATIC_NAME): $(OBJS) | $(LIB_BUILD_DIR)
 	@ echo AR -o $@
 	$(Q)ar rcs $@ $(OBJS)
 
-$(BUILD_DIR)/%.o: %.cpp $(PROTO_GEN_HEADER) | $(ALL_BUILD_DIRS)
+$(BUILD_DIR)/%.o: %.cpp | $(ALL_BUILD_DIRS)
 	@ echo CXX $<
 	$(Q)$(CXX) $< $(CXXFLAGS) -c -o $@ 2> $@.$(WARNS_EXT) \
 		|| (cat $@.$(WARNS_EXT); exit 1)
@@ -651,7 +653,7 @@ $(PROTO_BUILD_DIR)/%.pb.cc $(PROTO_BUILD_DIR)/%.pb.h : \
 $(PY_PROTO_BUILD_DIR)/%_pb2.py : $(PROTO_SRC_DIR)/%.proto \
 		$(PY_PROTO_INIT) | $(PY_PROTO_BUILD_DIR)
 	@ echo PROTOC \(python\) $<
-	$(Q)protoc --proto_path=src --python_out=python $<
+	$(Q)protoc --proto_path=$(PROTO_SRC_DIR) --python_out=$(PY_PROTO_BUILD_DIR) $<
 
 $(PY_PROTO_INIT): | $(PY_PROTO_BUILD_DIR)
 	touch $(PY_PROTO_INIT)
@@ -704,6 +706,6 @@ $(DISTRIBUTE_DIR): all py | $(DISTRIBUTE_SUBDIRS)
 	install -m 644 $(DYNAMIC_NAME) $(DISTRIBUTE_DIR)/lib
 	cd $(DISTRIBUTE_DIR)/lib; rm -f $(DYNAMIC_NAME_SHORT);   ln -s $(DYNAMIC_VERSIONED_NAME_SHORT) $(DYNAMIC_NAME_SHORT)
 	# add python - it's not the standard way, indeed...
-	cp -r python $(DISTRIBUTE_DIR)/
+	cp -r python $(DISTRIBUTE_DIR)/python
 
 -include $(DEPS)

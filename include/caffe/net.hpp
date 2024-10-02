@@ -75,6 +75,14 @@ class Net {
   void BackwardTo(int end);
 
   /**
+   * The network deconv works similarly to backward and also takes no input and output.
+   */
+  void Deconv(int deconv_type);
+  void DeconvFromTo(int start, int end, int deconv_type);
+  void DeconvFrom(int start, int deconv_type);
+  void DeconvTo(int end, int deconv_type);
+
+  /**
    * @brief Reshape all layers from bottom to top.
    *
    * This is useful to propagate changes to layer sizes without running
@@ -111,9 +119,9 @@ class Net {
    *        another Net.
    */
   void CopyTrainedLayersFrom(const NetParameter& param);
-  void CopyTrainedLayersFrom(const string& trained_filename);
-  void CopyTrainedLayersFromBinaryProto(const string& trained_filename);
-  void CopyTrainedLayersFromHDF5(const string& trained_filename);
+  void CopyTrainedLayersFrom(const string trained_filename);
+  void CopyTrainedLayersFromBinaryProto(const string trained_filename);
+  void CopyTrainedLayersFromHDF5(const string trained_filename);
   /// @brief Writes the net to a proto.
   void ToProto(NetParameter* param, bool write_diff = false) const;
   /// @brief Writes the net to an HDF5 file.
@@ -270,6 +278,8 @@ class Net {
   void ForwardDebugInfo(const int layer_id);
   /// @brief Helper for displaying debug info in Backward.
   void BackwardDebugInfo(const int layer_id);
+  /// @brief Helper for displaying debug info in Deconv.
+  void DeconvDebugInfo(const int layer_id);
   /// @brief Helper for displaying debug info in Update.
   void UpdateDebugInfo(const int param_id);
 

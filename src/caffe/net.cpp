@@ -5,9 +5,7 @@
 #include <utility>
 #include <vector>
 
-#ifdef USE_HDF5
-#include "hdf5.h"
-#endif  // USE_HDF5
+#include "hdf5/serial/hdf5.h"
 
 #include "caffe/common.hpp"
 #include "caffe/layer.hpp"
@@ -166,7 +164,7 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
   // loss.  We can skip backward computation for blobs that don't contribute
   // to the loss.
   // Also checks if all bottom blobs don't need backward computation (possible
-  // because the skip_propagate_down param) and so we can skip backward
+  // because the skip_propagate_down param) and so we can skip bacward
   // computation for the entire layer
   set<string> blobs_under_loss;
   set<string> blobs_skip_backp;
@@ -585,6 +583,19 @@ void Net<Dtype>::BackwardFromTo(int start, int end) {
 }
 
 template <typename Dtype>
+void Net<Dtype>::DeconvFromTo(int start, int end, int deconv_type) {
+  CHECK_GE(end, 0);
+  CHECK_LT(start, layers_.size());
+  for (int i = start; i >= end; --i) {
+    if (layer_need_backward_[i]) {
+      layers_[i]->Deconv(
+          top_vecs_[i], bottom_need_backward_[i], bottom_vecs_[i], deconv_type);
+      if (debug_info_) { DeconvDebugInfo(i); }
+    }
+  }
+}
+
+template <typename Dtype>
 void Net<Dtype>::ForwardDebugInfo(const int layer_id) {
   for (int top_id = 0; top_id < top_vecs_[layer_id].size(); ++top_id) {
     const Blob<Dtype>& blob = *top_vecs_[layer_id][top_id];
@@ -633,6 +644,29 @@ void Net<Dtype>::BackwardDebugInfo(const int layer_id) {
         << "    [Backward] "
         << "Layer " << layer_names_[layer_id]
         << ", param blob " << param_id
+        << " diff: " << diff_abs_val_mean;
+  }
+}
+
+template <typename Dtype>
+void Net<Dtype>::DeconvDebugInfo(const int layer_id) {
+  const vector<Blob<Dtype>*>& bottom_vec = bottom_vecs_[layer_id];
+  for (int bottom_id = 0; bottom_id < bottom_vec.size(); ++bottom_id) {
+    if (!bottom_need_backward_[layer_id][bottom_id]) { continue; }
+    const Blob<Dtype>& blob = *bottom_vec[bottom_id];
+    const string& blob_name = blob_names_[bottom_id_vecs_[layer_id][bottom_id]];
+    const Dtype diff_abs_val_mean = blob.asum_diff() / blob.count();
+    LOG(INFO) << "    [Deconv] "
+        << "Layer " << layer_names_[layer_id] << ", bottom blob " << blob_name
+        << " diff: " << diff_abs_val_mean;
+  }
+  for (int param_id = 0; param_id < layers_[layer_id]->blobs().size();
+       ++param_id) {
+    if (!layers_[layer_id]->param_propagate_down(param_id)) { continue; }
+    const Blob<Dtype>& blob = *layers_[layer_id]->blobs()[param_id];
+    const Dtype diff_abs_val_mean = blob.asum_diff() / blob.count();
+    LOG(INFO) << "    [Deconv] "
+        << "Layer " << layer_names_[layer_id] << ", param blob " << param_id
         << " diff: " << diff_abs_val_mean;
   }
 }
@@ -725,6 +759,21 @@ void Net<Dtype>::Backward() {
 }
 
 template <typename Dtype>
+void Net<Dtype>::DeconvFrom(int start, int deconv_type) {
+  DeconvFromTo(start, 0, deconv_type);
+}
+
+template <typename Dtype>
+void Net<Dtype>::DeconvTo(int end, int deconv_type) {
+  DeconvFromTo(layers_.size() - 1, end, deconv_type);
+}
+
+template <typename Dtype>
+void Net<Dtype>::Deconv(int deconv_type) {
+  DeconvFromTo(layers_.size() - 1, 0, deconv_type);
+}
+
+template <typename Dtype>
 void Net<Dtype>::Reshape() {
   for (int i = 0; i < layers_.size(); ++i) {
     layers_[i]->Reshape(bottom_vecs_[i], top_vecs_[i]);
@@ -770,7 +819,7 @@ void Net<Dtype>::CopyTrainedLayersFrom(const NetParameter& param) {
 }
 
 template <typename Dtype>
-void Net<Dtype>::CopyTrainedLayersFrom(const string& trained_filename) {
+void Net<Dtype>::CopyTrainedLayersFrom(const string trained_filename) {
   if (H5Fis_hdf5(trained_filename.c_str())) {
     CopyTrainedLayersFromHDF5(trained_filename);
   } else {
@@ -780,15 +829,14 @@ void Net<Dtype>::CopyTrainedLayersFrom(const string& trained_filename) {
 
 template <typename Dtype>
 void Net<Dtype>::CopyTrainedLayersFromBinaryProto(
-    const string& trained_filename) {
+    const string trained_filename) {
   NetParameter param;
   ReadNetParamsFromBinaryFileOrDie(trained_filename, &param);
   CopyTrainedLayersFrom(param);
 }
 
 template <typename Dtype>
-void Net<Dtype>::CopyTrainedLayersFromHDF5(const string& trained_filename) {
-#ifdef USE_HDF5
+void Net<Dtype>::CopyTrainedLayersFromHDF5(const string trained_filename) {
   hid_t file_hid = H5Fopen(trained_filename.c_str(), H5F_ACC_RDONLY,
                            H5P_DEFAULT);
   CHECK_GE(file_hid, 0) << "Couldn't open " << trained_filename;
@@ -835,10 +883,6 @@ void Net<Dtype>::CopyTrainedLayersFromHDF5(const string& trained_filename) {
   }
   H5Gclose(data_hid);
   H5Fclose(file_hid);
-#else
-  LOG(FATAL) << "CopyTrainedLayersFromHDF5 requires hdf5;"
-             << " compile with USE_HDF5.";
-#endif  // USE_HDF5
 }
 
 template <typename Dtype>
@@ -855,8 +899,6 @@ void Net<Dtype>::ToProto(NetParameter* param, bool write_diff) const {
 
 template <typename Dtype>
 void Net<Dtype>::ToHDF5(const string& filename, bool write_diff) const {
-// This code is taken from https://github.com/sh1r0/caffe-android-lib
-#ifdef USE_HDF5
   hid_t file_hid = H5Fcreate(filename.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT,
       H5P_DEFAULT);
   CHECK_GE(file_hid, 0)
@@ -910,10 +952,6 @@ void Net<Dtype>::ToHDF5(const string& filename, bool write_diff) const {
     H5Gclose(diff_hid);
   }
   H5Fclose(file_hid);
-// This code is taken from https://github.com/sh1r0/caffe-android-lib
-#else
-  LOG(FATAL) << "ToHDF5 requires hdf5; compile with USE_HDF5.";
-#endif  // USE_HDF5
 }
 
 template <typename Dtype>
